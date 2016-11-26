@@ -8,6 +8,9 @@
 
 #include "ScheduleCreator.h"
 
+#include <set>
+//#include <iostream>
+
 ScheduleCreator :: ~ScheduleCreator() {
     comparators.clear();
 }
@@ -88,9 +91,67 @@ void ScheduleCreator :: divide(vector<int> processors) {
     processors_down.clear();
 }
 
-void ScheduleCreator :: better_ticks() {
-    
+bool try_insert(set<int>& busy, pair<int,int> comp) {
+    if (busy.find(comp.first) == busy.end() && busy.find(comp.second) == busy.end()) {
+        busy.insert(comp.first);
+        busy.insert(comp.second);
+        return true;
+    }
+    return false;
 }
+
+/*
+void ScheduleCreator :: add_ticks() {
+    vector< set<int> > busy(comparators.size());
+    vector< int > indices(comparators.size());
+    
+    for (size_t i = 0; i < comparators.size(); ++i){
+        cout << "(" << comparators[i].first << " " << comparators[i].second << ") ";
+    }
+    cout << endl;
+    cout << "Adding ticks" << endl;
+    
+    int k;
+    bool found;
+    
+    for (int j = 0; j < comparators.size(); ++j) {
+        pair<int,int> comp = comparators[j];
+        if (j - 1 > 0) {
+            k = indices[j - 1];
+            if ( try_insert(busy[k], comp) ){
+                indices[j] = k;
+            } else {
+                found = false;
+                for (int i = 0; i < j; ++i) {
+                    if (comparators[i] == comp && try_insert(busy[ indices[i] ], comp)) {
+                        indices[j] = i;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    
+                }
+            }
+        }
+        for (size_t i = 0; i < busy.size(); ++i) {
+            if (busy[i].find(comp.first) == busy[i].end() && busy[i].find(comp.second) == busy[i].end()) {
+                cout << "Not present [" << i << "]: (" << comp.first << ' ' << comp.second << ')' << endl;
+                busy[i].insert(comp.first);
+                busy[i].insert(comp.second);
+                indices[j] = i;
+                if (i >= ticks.size()) {
+                    ticks.push_back(vector< pair<int,int> >());
+                }
+                ticks[i].push_back(comp);
+                break;
+            }
+        }
+    }
+    busy.clear();
+    indices.clear();
+}
+*/
 
 vector< pair<int, int> > ScheduleCreator :: create_schedule( int size ) {
     vector<int> processors(size);
@@ -102,7 +163,7 @@ vector< pair<int, int> > ScheduleCreator :: create_schedule( int size ) {
     divide(processors);
     processors.clear();
     
-    better_ticks();
+    //add_ticks();
     
     return comparators;
 }
