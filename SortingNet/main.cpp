@@ -13,6 +13,7 @@
 #include <stack>
 #include <string>
 #include <climits>
+#include <fstream>
 #include "ScheduleCreator.h"
 
 struct Point {
@@ -132,34 +133,18 @@ int main(int argc, char* argv[]) {
         return -1;
     }
     
-    srand(static_cast<unsigned int>(time(NULL)));
-    
-    // every process will be able to see this info
-    int n1 = stoi(argv[1]);
-    int n2 = stoi(argv[2]);
+    int n1 = atoi(argv[1]);
+    int n2 = atoi(argv[2]);
     bool sortX = string(argv[3]) == "0";
     
     int size = n1 * n2;
     
-    float * x = new float[size];
-    float * y = new float[size];
     point * P = new point[size];
     point * result;
-    
-    init_arr(x, size, n2);
-    init_arr(y, size, n2);
-    
-    cout << "Before sort:" << endl;
-    for (int it = 0; it < size; ++it) {
-        P[it].coord[0] = x[it];
-        P[it].coord[1] = y[it];
-        P[it].index = it;
-        cout << it << ' ' << x[it] << ' ' << y[it] << endl;
-    }
-    
-    delete [] x;
-    delete [] y;
-    
+
+    double init_time;
+    double sort_time;
+    double write_time;
     
     // initialization of MPI services
     MPI_Init(&argc, &argv);
@@ -171,6 +156,27 @@ int main(int argc, char* argv[]) {
     if (proc_count < 2) {
         cout << "Processor count must be greater than 1" << endl;
         return -1;
+    }
+    
+    if (rank == 0) {
+        init_time = MPI_Wtime();
+        srand(static_cast<unsigned int>(time(NULL)));
+        
+        float * x = new float[size];
+        float * y = new float[size];
+        
+        init_arr(x, size, n2);
+        init_arr(y, size, n2);
+        
+        for (int it = 0; it < size; ++it) {
+            P[it].coord[0] = x[it];
+            P[it].coord[1] = y[it];
+            P[it].index = it;
+        }
+        
+        delete [] x;
+        delete [] y;
+        init_time = MPI_Wtime() - init_time;
     }
     
     // creating new MPI_Datatypes for our future needs
@@ -203,7 +209,9 @@ int main(int argc, char* argv[]) {
         return -1;
     }
     
+    MPI_Bcast(P, size, PointMPI, 0, MPI_COMM_WORLD);
     
+    sort_time = MPI_Wtime();
     // dispatching first batches that need sort
     int arr_size = (size + 1) / proc_count;
     vector< point > to_sort;
@@ -285,19 +293,28 @@ int main(int argc, char* argv[]) {
     }
     MPI_Gather(current, arr_size, PointMPI, result, arr_size, PointMPI, 0, MPI_COMM_WORLD);
     
+    sort_time = MPI_Wtime() - sort_time;
     
     // finalization
     if (rank == 0) {
-        cout << "After sort:" << endl;
-        for (int i = 0; i < arr_size * proc_count; ++i) {
-            if (result[i].index != -1 && result[i].coord[0] != INT_MAX) {
-                cout << i << ' ' << result[i].coord[0] << ' ' << result[i].coord[1] << endl;
+        write_time = MPI_Wtime();
+        cout << "output_" << proc_count << "_" << size << "_" << sortX << endl;
+        cout << "elem to sort: " << size << endl;
+        cout << "init time: " << init_time << endl;
+        cout << "sort time: " << sort_time << endl;
+        
+        for (int i = 1; i < size; ++i) {
+            if (sortX ? result[i - 1].coord[0] > result[i].coord[0] : result[i - 1].coord[1] > result[i].coord[1]) {
+                cout << "Error in sorting algorithm" << endl;
+                break;
             }
         }
-        delete [] P;
+        
+        cout << "write time: " << MPI_Wtime() - write_time << endl;
         delete [] result;
     }
     
+    delete [] P;
     MPI_Finalize();
     
     return 0;
