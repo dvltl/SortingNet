@@ -11,9 +11,7 @@
 #include <string>
 #include <vector>
 #include <stack>
-#include <string>
 #include <climits>
-#include <fstream>
 #include "ScheduleCreator.h"
 
 struct Point {
@@ -50,21 +48,18 @@ bool pcompareY (point a, point b) {
     return (y1 < y2);
 }
 
-
 float get_rand_float(float i, float j) {
     if (i * j == 0)
-        return -(static_cast<float>(rand() % 100000));
+        return -(static_cast<float>(rand() % 10000));
     else
-        return static_cast<float>(rand() % 100000) / (i * j);
+        return static_cast<float>(rand() % 10000) / (i * j);
 }
 
-void init_arr(float * arr, int size, int n) {
-    int i;
-    int j;
-    for (int it = 0; it < size; ++it) {
-        i = it / n;
-        j = it % n;
-        arr[i * n + j] = get_rand_float(i, j);
+void init_arr(float * arr, int n1, int n2) {
+    for (int i = 0; i < n1; ++i) {
+        for (int j = 0; j < n2; ++j) {
+            arr[i * n2 + j] = get_rand_float(i, j);
+        }
     }
 }
 
@@ -86,44 +81,36 @@ point * to_carray (const vector< point > & vec) {
     return result;
 }
 
-vector< point > merge(const vector< point > & first, const vector< point > & second, bool head, bool sortX) {
-    vector< point > result;
+point * m_merge(const point * first, const point * second, int size, bool head, bool (*comp)(point, point)) {
+    point * result = new point[size];
     int i, j, k;
     
     if (head) {
         i = 0;
         j = 0;
         
-        while (result.size() < first.size()) {
-            if (sortX ? pcompareX(first[i], second[j]) : pcompareY(first[i], second[j])) {
-                result.push_back(first[i]);
-                ++i;
+        for (k = 0; k < size; ++k){
+            if (comp(first[i], second[j])) {
+                result[k] = first[i++];
             } else {
-                result.push_back(second[j]);
-                ++j;
+                result[k] = second[j++];
             }
         }
     } else {
-        i = first.size() - 1;
-        j = second.size() - 1;
-        stack< point > st;
-        // being lazy here
-        while (st.size() < first.size()) {
-            if (sortX ? !pcompareX(first[i], second[j]) : !pcompareY(first[i], second[j])) {
-                st.push(first[i]);
-                --i;
+        i = size - 1;
+        j = size - 1;
+        
+        for (k = size - 1; k >= 0; --k) {
+            if (!comp(first[i], second[j])) {
+                result[k] = first[i--];
             } else {
-                st.push(second[j]);
-                --j;
+                result[k] = second[j--];
             }
         }
         
-        while (!st.empty()) {
-            result.push_back(st.top());
-            st.pop();
-        }
     }
     
+    delete [] first;
     return result;
 }
 
@@ -136,6 +123,13 @@ int main(int argc, char* argv[]) {
     int n1 = atoi(argv[1]);
     int n2 = atoi(argv[2]);
     bool sortX = string(argv[3]) == "0";
+    bool (*compare)(point, point);
+    
+    if (sortX) {
+        compare = &pcompareX;
+    } else {
+        compare = &pcompareY;
+    }
     
     int size = n1 * n2;
     
@@ -157,26 +151,24 @@ int main(int argc, char* argv[]) {
         cout << "Processor count must be greater than 1" << endl;
         return -1;
     }
-    
+
+    init_time = MPI_Wtime();
     if (rank == 0) {
-        init_time = MPI_Wtime();
         srand(static_cast<unsigned int>(time(NULL)));
         
-        float * x = new float[size];
-        float * y = new float[size];
+        float * arr = new float[size];
         
-        init_arr(x, size, n2);
-        init_arr(y, size, n2);
-        
+        init_arr(arr, n1, n2);
         for (int it = 0; it < size; ++it) {
-            P[it].coord[0] = x[it];
-            P[it].coord[1] = y[it];
+            P[it].coord[0] = arr[it];
             P[it].index = it;
         }
         
-        delete [] x;
-        delete [] y;
-        init_time = MPI_Wtime() - init_time;
+        init_arr(arr, n1, n2);
+        for (int it = 0; it < size; ++it) {
+            P[it].coord[1] = arr[it];
+        }
+        delete [] arr;
     }
     
     // creating new MPI_Datatypes for our future needs
@@ -211,7 +203,6 @@ int main(int argc, char* argv[]) {
     
     MPI_Bcast(P, size, PointMPI, 0, MPI_COMM_WORLD);
     
-    sort_time = MPI_Wtime();
     // dispatching first batches that need sort
     int arr_size = (size + 1) / proc_count;
     vector< point > to_sort;
@@ -223,40 +214,35 @@ int main(int argc, char* argv[]) {
     
     // adding fictive elements in case we are short on elements
     point fictive;
-    fictive.coord[0] = INT_MAX; // just in case
-    fictive.coord[1] = INT_MAX;
+    fictive.coord[0] = LONG_MAX; // just in case
+    fictive.coord[1] = LONG_MAX;
     fictive.index = -1;
     
     for (int i = 0; i < (arr_size - to_sort.size()); ++i) {
         to_sort.push_back(fictive);
     }
     
-    
-    // initial sort
-    if (sortX) {
-        sort(to_sort.begin(), to_sort.end(), pcompareX);
-    } else {
-        sort(to_sort.begin(), to_sort.end(), pcompareY);
-    }
-    
-    
-    // CURRENT
-    point * current = new point[arr_size];
-    for (int i = 0; i < arr_size; ++i) {
-        current[i] = to_sort[i];
-    }
-    
-    
     // creating schedule for processors to act as batcher sorting net
     ScheduleCreator creator;
     vector< pair<int,int> > sched = creator.create_schedule(proc_count);
     
-    // TODO: 2nd part of the array goes in the reversed order (from biggest to smallest)
+    init_time = MPI_Wtime() - init_time;
+
+    
+    // initial sort
+    sort_time = MPI_Wtime();
+    sort(to_sort.begin(), to_sort.end(), compare);
+    
+    
+    // CURRENT
+    point * current = to_carray(to_sort);
     
     // batcher sorting net part
     MPI_Status status;
     point * received = new point[arr_size];
-    vector< point > merge_res;
+    
+    const int part_num = 2;
+    const int sz = arr_size / part_num;
     
     for (size_t i = 0; i < sched.size(); ++i) {
         if (rank == sched[i].first) {
@@ -264,24 +250,14 @@ int main(int argc, char* argv[]) {
             MPI_Recv(received, arr_size, PointMPI, sched[i].second, 0, MPI_COMM_WORLD, &status);
             
             // need only first $arr_size elements
-            vector< point > new_tosort = to_vector(received, arr_size);
-            
-            to_sort = merge(to_sort, new_tosort, true, sortX);
-            
-            delete [] current;
-            current = to_carray(to_sort);
+            current = m_merge(current, received, arr_size, true, compare);
             
         } else if (rank == sched[i].second) {
             MPI_Recv(received, arr_size, PointMPI, sched[i].first, 0, MPI_COMM_WORLD, &status);
             MPI_Send(current, arr_size, PointMPI, sched[i].first, 0, MPI_COMM_WORLD);
             
             // need only last $arr_size elements
-            vector< point > new_tosort = to_vector(received, arr_size);
-            
-            to_sort = merge(to_sort, new_tosort, false, sortX);
-            
-            delete [] current;
-            current = to_carray(to_sort);
+            current = m_merge(current, received, arr_size, false, compare);
             
         }
     }
@@ -295,23 +271,48 @@ int main(int argc, char* argv[]) {
     
     sort_time = MPI_Wtime() - sort_time;
     
+    double * times;
+    if (rank == 0) {
+        times = new double[proc_count];
+    }
+    MPI_Gather(&sort_time, 1, MPI_DOUBLE, times, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    
+    
     // finalization
     if (rank == 0) {
+        
+        double resulting_time = 0;
+        for (int i = 0; i < proc_count; ++i) {
+            resulting_time += times[i];
+        }
+        
         write_time = MPI_Wtime();
         cout << "output_" << proc_count << "_" << size << "_" << sortX << endl;
         cout << "elem to sort: " << size << endl;
         cout << "init time: " << init_time << endl;
-        cout << "sort time: " << sort_time << endl;
+        cout << "sort time: " << resulting_time << endl;
         
-        for (int i = 1; i < size; ++i) {
-            if (sortX ? result[i - 1].coord[0] > result[i].coord[0] : result[i - 1].coord[1] > result[i].coord[1]) {
-                cout << "Error in sorting algorithm" << endl;
+        int i, k;
+        i = 0;
+        k = 0;
+        while (i < arr_size * proc_count && k < size) {
+            if (result[i].index != -1) {
+                P[k] = result[i];
+                ++k;
+            }
+            ++i;
+        }
+        delete [] result;
+        
+        for (i = 1; i < size; ++i) {
+            if (sortX ? P[i-1].coord[0] > P[i].coord[0] : P[i-1].coord[1] > P[i].coord[1]) {
+                cout << "Error in sort" << endl;
                 break;
             }
         }
         
         cout << "write time: " << MPI_Wtime() - write_time << endl;
-        delete [] result;
+        
     }
     
     delete [] P;

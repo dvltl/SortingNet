@@ -19,11 +19,9 @@ private:
     
     void join( vector<int>, vector<int> );
     void divide( vector<int> );
-//    void add_ticks();
 public:
     ~ScheduleCreator();
     vector< pair<int, int> > create_schedule( int );
-//    vector< vector< pair<int, int> > > get_ticks();           //should be used after create_schedule if used at all
 };
 
 #endif /* ScheduleCreator_h */
