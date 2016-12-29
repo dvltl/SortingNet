@@ -8,8 +8,6 @@
 
 #include "ScheduleCreator.h"
 
-#include <set>
-
 ScheduleCreator :: ~ScheduleCreator() {
     comparators.clear();
 }
@@ -88,15 +86,6 @@ void ScheduleCreator :: divide(vector<int> processors) {
     
     processors_up.clear();
     processors_down.clear();
-}
-
-bool try_insert(set<int>& busy, pair<int,int> comp) {
-    if (busy.find(comp.first) == busy.end() && busy.find(comp.second) == busy.end()) {
-        busy.insert(comp.first);
-        busy.insert(comp.second);
-        return true;
-    }
-    return false;
 }
 
 vector< pair<int, int> > ScheduleCreator :: create_schedule( int size ) {

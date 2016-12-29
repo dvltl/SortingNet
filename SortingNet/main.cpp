@@ -7,82 +7,22 @@
 //
 
 #include <mpi.h>
+#include <omp.h>
 #include <iostream>
 #include <string>
 #include <vector>
 #include <stack>
 #include <climits>
 #include "ScheduleCreator.h"
+#include "Point.h"
 
-struct Point {
-    float coord[2];
-    int index;
-};
-
-typedef struct Point point;
 using namespace std;
 
-bool pcompareX (point a, point b) {
-    float x1 = a.coord[0];
-    float x2 = b.coord[0];
-    
-    if (a.index < 0) {
-        return false;
-    } else if (b.index < 0) {
-        return true;
-    }
-    
-    return (x1 < x2);
+float get_float(float i, float j) {
+    return (float)(i + j) / 2;
 }
 
-bool pcompareY (point a, point b) {
-    float y1 = a.coord[1];
-    float y2 = b.coord[1];
-    
-    if (a.index < 0) {
-        return false;
-    } else if (b.index < 0) {
-        return true;
-    }
-    
-    return (y1 < y2);
-}
-
-float get_rand_float(float i, float j) {
-    if (i * j == 0)
-        return -(static_cast<float>(rand() % 10000));
-    else
-        return static_cast<float>(rand() % 10000) / (i * j);
-}
-
-void init_arr(float * arr, int n1, int n2) {
-    for (int i = 0; i < n1; ++i) {
-        for (int j = 0; j < n2; ++j) {
-            arr[i * n2 + j] = get_rand_float(i, j);
-        }
-    }
-}
-
-vector< point > to_vector(const point * const arr, int size) {
-    vector< point > result;
-    for (int i = 0; i < size; ++i) {
-        result.push_back(arr[i]);
-    }
-    return result;
-}
-
-// possible memory leak?
-// call delete before using again
-point * to_carray (const vector< point > & vec) {
-    point * result = new point[vec.size()];
-    for (int i = 0; i < vec.size(); ++i) {
-        result[i] = vec[i];
-    }
-    return result;
-}
-
-point * m_merge(const point * first, const point * second, int size, bool head, bool (*comp)(point, point)) {
-    point * result = new point[size];
+void m_merge(const point * first, const point * second, point * sub, int size, bool head, bool (*comp)(point, point)) {
     int i, j, k;
     
     if (head) {
@@ -91,9 +31,9 @@ point * m_merge(const point * first, const point * second, int size, bool head, 
         
         for (k = 0; k < size; ++k){
             if (comp(first[i], second[j])) {
-                result[k] = first[i++];
+                sub[k] = first[i++];
             } else {
-                result[k] = second[j++];
+                sub[k] = second[j++];
             }
         }
     } else {
@@ -102,16 +42,52 @@ point * m_merge(const point * first, const point * second, int size, bool head, 
         
         for (k = size - 1; k >= 0; --k) {
             if (!comp(first[i], second[j])) {
-                result[k] = first[i--];
+                sub[k] = first[i--];
             } else {
-                result[k] = second[j--];
+                sub[k] = second[j--];
             }
         }
         
     }
     
-    delete [] first;
-    return result;
+}
+
+void init_sort(point * to_sort, int arr_size, int rank, bool (*compare)(point, point)) {
+    int part_num = 4;
+    int part_size = arr_size / part_num;
+    
+    #pragma omp parallel for
+    for (int i = 1; i < part_num; ++i){
+        sort(&to_sort[0] + (i - 1) * part_size, &to_sort[0] + i * part_size, compare);
+    }
+    
+    vector< vector<point> > sort_buf;
+    vector< vector<point> > buf;
+    
+    for (int i = 0; i < part_num / 2; ++i){
+        buf.push_back(vector<point>(2 * part_size));
+    }
+    
+    for (int i = 0; i < part_num; ++i){
+        sort_buf.push_back(vector<point>(part_size));
+    }
+    
+    for (int i = 1; i <= part_num; ++i){
+        copy(&to_sort[0] + (i - 1) * part_size, &to_sort[0] + i * part_size, (sort_buf[ i - 1 ]).begin());
+    }
+    
+    #pragma omp parallel for
+    for (int i = 1, k = 0; i < part_num; i += 2) {
+        merge(sort_buf[ i - 1 ].begin(), sort_buf[ i - 1 ].end(),
+              sort_buf[ i ].begin(), sort_buf[ i ].end(),
+              buf[ k++ ].begin(), compare);
+    }
+    
+    merge(buf[0].begin(), buf[0].end(),
+          buf[1].begin(), buf[1].end(),
+          &to_sort[0], compare);
+
+
 }
 
 int main(int argc, char* argv[]) {
@@ -124,18 +100,18 @@ int main(int argc, char* argv[]) {
     int n2 = atoi(argv[2]);
     bool sortX = string(argv[3]) == "0";
     bool (*compare)(point, point);
+    point p;
     
     if (sortX) {
-        compare = &pcompareX;
+        compare = &p.pcompareX;
     } else {
-        compare = &pcompareY;
+        compare = &p.pcompareY;
     }
     
     int size = n1 * n2;
     
-    point * P = new point[size];
     point * result;
-
+    
     double init_time;
     double sort_time;
     double write_time;
@@ -153,23 +129,6 @@ int main(int argc, char* argv[]) {
     }
 
     init_time = MPI_Wtime();
-    if (rank == 0) {
-        srand(static_cast<unsigned int>(time(NULL)));
-        
-        float * arr = new float[size];
-        
-        init_arr(arr, n1, n2);
-        for (int it = 0; it < size; ++it) {
-            P[it].coord[0] = arr[it];
-            P[it].index = it;
-        }
-        
-        init_arr(arr, n1, n2);
-        for (int it = 0; it < size; ++it) {
-            P[it].coord[1] = arr[it];
-        }
-        delete [] arr;
-    }
     
     // creating new MPI_Datatypes for our future needs
     // coords array
@@ -189,8 +148,8 @@ int main(int argc, char* argv[]) {
     MPI_Datatype types[2] = { CoordsMPI, MPI_INT };
     int blocks[2] = {1, 1};
     MPI_Aint disp[2];
-    disp[0] = reinterpret_cast<const unsigned char*>(&P[0].coord[0]) - reinterpret_cast<const unsigned char*>(&P[0]);
-    disp[1] = reinterpret_cast<const unsigned char*>(&P[0].index) - reinterpret_cast<const unsigned char*>(&P[0]);
+    disp[0] = reinterpret_cast<const unsigned char*>(&p.coord[0]) - reinterpret_cast<const unsigned char*>(&p);
+    disp[1] = reinterpret_cast<const unsigned char*>(&p.index) - reinterpret_cast<const unsigned char*>(&p);
     
     if (MPI_Type_create_struct(2, blocks, disp, types, &PointMPI) != MPI_SUCCESS) {
         MPI_Finalize();
@@ -201,14 +160,19 @@ int main(int argc, char* argv[]) {
         return -1;
     }
     
-    MPI_Bcast(P, size, PointMPI, 0, MPI_COMM_WORLD);
-    
     // dispatching first batches that need sort
     int arr_size = (size + 1) / proc_count;
     vector< point > to_sort;
     
+    int i, j;
+    
     for (int it = rank * arr_size; it < min((rank + 1) * arr_size, size); ++it) {
-        to_sort.push_back(P[it]);
+        i = it / n2;
+        j = it % n2;
+        p.coord[0] = get_float(i, j);
+        p.coord[1] = get_float(i, j);
+        p.index = it;
+        to_sort.push_back(p);
     }
     
     
@@ -226,23 +190,23 @@ int main(int argc, char* argv[]) {
     ScheduleCreator creator;
     vector< pair<int,int> > sched = creator.create_schedule(proc_count);
     
+    point * received = new point[arr_size];
+    point * buf = new point[arr_size];
+    point * pbuf;
+    point * current;
+    
     init_time = MPI_Wtime() - init_time;
-
     
     // initial sort
     sort_time = MPI_Wtime();
-    sort(to_sort.begin(), to_sort.end(), compare);
     
+    init_sort(&to_sort[0], arr_size, rank, compare);
     
     // CURRENT
-    point * current = to_carray(to_sort);
+    current = &to_sort[0];
     
     // batcher sorting net part
     MPI_Status status;
-    point * received = new point[arr_size];
-    
-    const int part_num = 2;
-    const int sz = arr_size / part_num;
     
     for (size_t i = 0; i < sched.size(); ++i) {
         if (rank == sched[i].first) {
@@ -250,26 +214,29 @@ int main(int argc, char* argv[]) {
             MPI_Recv(received, arr_size, PointMPI, sched[i].second, 0, MPI_COMM_WORLD, &status);
             
             // need only first $arr_size elements
-            current = m_merge(current, received, arr_size, true, compare);
+            m_merge(current, received, buf, arr_size, true, compare);
+
+            pbuf = current;
+            current = buf;
+            buf = pbuf;
             
         } else if (rank == sched[i].second) {
             MPI_Recv(received, arr_size, PointMPI, sched[i].first, 0, MPI_COMM_WORLD, &status);
             MPI_Send(current, arr_size, PointMPI, sched[i].first, 0, MPI_COMM_WORLD);
             
             // need only last $arr_size elements
-            current = m_merge(current, received, arr_size, false, compare);
-            
+            m_merge(current, received, buf, arr_size, false, compare);
+
+            pbuf = current;
+            current = buf;
+            buf = pbuf;
         }
     }
     
-    
-    // gathering sort results from all processors
-    if (rank == 0) {
-        result = new point[ arr_size * proc_count ];
-    }
-    MPI_Gather(current, arr_size, PointMPI, result, arr_size, PointMPI, 0, MPI_COMM_WORLD);
-    
     sort_time = MPI_Wtime() - sort_time;
+
+    delete [] received;
+    to_sort.clear();
     
     double * times;
     if (rank == 0) {
@@ -282,8 +249,8 @@ int main(int argc, char* argv[]) {
     if (rank == 0) {
         
         double resulting_time = 0;
-        for (int i = 0; i < proc_count; ++i) {
-            resulting_time += times[i];
+        for (int it = 0; it < proc_count; ++it) {
+            resulting_time += times[it];
         }
         
         write_time = MPI_Wtime();
@@ -291,31 +258,11 @@ int main(int argc, char* argv[]) {
         cout << "elem to sort: " << size << endl;
         cout << "init time: " << init_time << endl;
         cout << "sort time: " << resulting_time << endl;
-        
-        int i, k;
-        i = 0;
-        k = 0;
-        while (i < arr_size * proc_count && k < size) {
-            if (result[i].index != -1) {
-                P[k] = result[i];
-                ++k;
-            }
-            ++i;
-        }
-        delete [] result;
-        
-        for (i = 1; i < size; ++i) {
-            if (sortX ? P[i-1].coord[0] > P[i].coord[0] : P[i-1].coord[1] > P[i].coord[1]) {
-                cout << "Error in sort" << endl;
-                break;
-            }
-        }
-        
+        cout << "comparators: " << sched.size() << endl;
         cout << "write time: " << MPI_Wtime() - write_time << endl;
         
     }
     
-    delete [] P;
     MPI_Finalize();
     
     return 0;
